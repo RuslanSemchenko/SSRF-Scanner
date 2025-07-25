@@ -46,7 +46,7 @@
 ?return_to=http://127.0.0.1
 ?checkout_url=http://127.0.0.1
 /cgi-bin/redirect.cgi?http://127.0.0.1
-/out/{payloadhttp://127.0.0.1
+/out/http://127.0.0.1
 /out?http://127.0.0.1
 /login?to=http://127.0.0.1
 ?image_url=http://127.0.0.1
