@@ -1,0 +1,50 @@
+# Cloud Metadata Payloads
+# AWS
+169.254.169.254/latest/meta-data/
+169.254.169.254/latest/user-data/
+169.254.169.254/latest/meta-data/iam/security-credentials/
+169.254.169.254/latest/meta-data/iam/security-credentials/ecs-task-role
+169.254.169.254/latest/dynamic/instance-identity/document
+169.254.169.254/latest/api/token
+169.254.170.2/v2/credentials
+
+# Google Cloud
+metadata.google.internal/computeMetadata/v1/
+metadata.google.internal/computeMetadata/v1beta1/
+169.254.169.254/computeMetadata/v1/
+metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token
+metadata.google.internal/computeMetadata/v1/instance/disks/?recursive=true
+
+# Azure
+169.254.169.254/metadata/instance?api-version=2021-02-01
+169.254.169.254/metadata/identity/oauth2/token?api-version=2018-02-01&resource=https://management.azure.com/
+169.254.169.254/metadata/scheduledevents?api-version=2020-07-01
+
+# Digital Ocean
+169.254.169.254/metadata/v1.json
+169.254.169.254/metadata/v1/id
+169.254.169.254/metadata/v1/hostname
+
+# Alibaba Cloud
+100.100.100.200/latest/meta-data/
+100.100.100.200/latest/meta-data/instance-id
+100.100.100.200/latest/user-data
+
+# Oracle Cloud
+192.0.0.192/opc/v1/instance/
+192.0.0.192/opc/v1/vnics/
+192.0.0.192/opc/v2/instance/
+
+# Kubernetes
+kubernetes.default.svc
+kubernetes.default.svc.cluster.local
+
+# Scaleway
+169.254.42.42/conf
+
+# Equinix Metal (Packet)
+metadata.packet.net/userdata
+
+# Docker Internal
+host.docker.internal
+docker.for.mac.localhost

